@@ -34,7 +34,7 @@ type BuiltinEvalContext struct {
 
 	// pathSet indicates that this context was explicitly created for a
 	// specific path, and can be safely used for evaluation. This lets us
-	// differentiate between Pathvalue being unset, and the zero value which is
+	// differentiate between PathValue being unset, and the zero value which is
 	// equivalent to RootModuleInstance.  Path and Evaluation methods will
 	// panic if this is not set.
 	pathSet bool
@@ -135,7 +135,7 @@ func (ctx *BuiltinEvalContext) InitProvider(addr addrs.AbsProviderConfig) (provi
 		return nil, err
 	}
 
-	log.Printf("[TRACE] BuiltinEvalContext: Initialized %q provider for %s", addr.LegacyString(), addr)
+	log.Printf("[TRACE] BuiltinEvalContext: Initialized %q provider for %s", addr.String(), addr)
 	ctx.ProviderCache[key] = p
 
 	return p, nil
@@ -330,6 +330,9 @@ func (ctx *BuiltinEvalContext) SetModuleCallArguments(n addrs.ModuleCallInstance
 }
 
 func (ctx *BuiltinEvalContext) GetVariableValue(addr addrs.AbsInputVariableInstance) cty.Value {
+	ctx.VariableValuesLock.Lock()
+	defer ctx.VariableValuesLock.Unlock()
+
 	modKey := addr.Module.String()
 	modVars := ctx.VariableValues[modKey]
 	val, ok := modVars[addr.Variable.Name]

@@ -190,44 +190,35 @@ func (t *PruneUnusedValuesTransformer) Transform(g *Graph) error {
 	// are no more changes.
 	for removed := 0; ; removed = 0 {
 		for _, v := range g.Vertices() {
+			// we're only concerned with values that don't need to be saved in state
 			switch v := v.(type) {
-			case *NodeApplyableOutput:
-				// If we're not certain this is a full destroy, we need to keep any
-				// root module outputs
-				if v.Addr.Module.IsRoot() && !t.Destroy {
+			case graphNodeTemporaryValue:
+				if !v.temporaryValue() {
 					continue
 				}
-			case *NodePlannableOutput:
-				// Have similar guardrails for plannable outputs as applyable above
-				if v.Module.IsRoot() && !t.Destroy {
-					continue
-				}
-			case *NodeLocal, *NodeApplyableModuleVariable, *NodePlannableModuleVariable:
-				// OK
 			default:
-				// We're only concerned with variables, locals and outputs
 				continue
 			}
 
 			dependants := g.UpEdges(v)
 
-			switch dependants.Len() {
-			case 0:
-				// nothing at all depends on this
+			// any referencers in the dependents means we need to keep this
+			// value for evaluation
+			removable := true
+			for _, d := range dependants.List() {
+				if _, ok := d.(GraphNodeReferencer); ok {
+					removable = false
+					break
+				}
+			}
+
+			if removable {
 				log.Printf("[TRACE] PruneUnusedValuesTransformer: removing unused value %s", dag.VertexName(v))
 				g.Remove(v)
 				removed++
-			case 1:
-				// because an output's destroy node always depends on the output,
-				// we need to check for the case of a single destroy node.
-				d := dependants.List()[0]
-				if _, ok := d.(*NodeDestroyableOutput); ok {
-					log.Printf("[TRACE] PruneUnusedValuesTransformer: removing unused value %s", dag.VertexName(v))
-					g.Remove(v)
-					removed++
-				}
 			}
 		}
+
 		if removed == 0 {
 			break
 		}
@@ -271,6 +262,11 @@ func (m *ReferenceMap) References(v dag.Vertex) []dag.Vertex {
 				subject = ri.ContainingResource()
 			case addrs.ResourceInstancePhase:
 				subject = ri.ContainingResource()
+			case addrs.AbsModuleCallOutput:
+				subject = ri.ModuleCallOutput()
+			default:
+				log.Printf("[WARN] ReferenceTransformer: reference not found: %q", subject)
+				continue
 			}
 			key = m.referenceMapKey(v, subject)
 		}
@@ -373,17 +369,6 @@ func NewReferenceMap(vs []dag.Vertex) *ReferenceMap {
 		for _, addr := range rn.ReferenceableAddrs() {
 			key := m.mapKey(path, addr)
 			vertices[key] = append(vertices[key], v)
-		}
-
-		// Any node can be referenced by the address of the module it belongs
-		// to or any of that module's ancestors.
-		for _, addr := range path.Ancestors()[1:] {
-			// Can be referenced either as the specific call instance (with
-			// an instance key) or as the bare module call itself (the "module"
-			// block in the parent module that created the instance).
-			callPath, call := addr.Call()
-			callKey := m.mapKey(callPath, call)
-			vertices[callKey] = append(vertices[callKey], v)
 		}
 	}
 
